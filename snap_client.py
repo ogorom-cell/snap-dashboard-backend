@@ -20,7 +20,7 @@ def build_auth_url(state: str) -> str:
         "client_id": settings.SNAP_CLIENT_ID,
         "redirect_uri": settings.REDIRECT_URI,
         "response_type": "code",
-        "scope": "snapchat-marketing-api",
+        "scope": "snapchat-profile-api",
         "state": state,
     }
     return f"{AUTH_URL}?{urlencode(params)}"
