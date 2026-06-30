@@ -4,6 +4,7 @@ Snapchat Dashboard — FastAPI Backend
 Run locally:  uvicorn main:app --reload
 """
 from contextlib import asynccontextmanager
+from urllib.parse import urlparse
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from config import settings
@@ -29,9 +30,12 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+_parsed = urlparse(settings.FRONTEND_URL)
+_cors_origin = f"{_parsed.scheme}://{_parsed.netloc}"
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[settings.FRONTEND_URL],
+    allow_origins=[settings.FRONTEND_URL, _cors_origin],
     allow_credentials=True,   # required so JWT cookie is sent cross-origin
     allow_methods=["*"],
     allow_headers=["*"],

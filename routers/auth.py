@@ -108,7 +108,7 @@ def callback(code: str, state: str, db: Session = Depends(get_db)):
     db.refresh(user)
 
     # Set JWT session cookie and redirect to frontend dashboard
-    response = RedirectResponse(url=f"{settings.FRONTEND_URL}/dashboard")
+    response = RedirectResponse(url=settings.FRONTEND_URL)
     response.set_cookie(
         key="session",
         value=create_jwt(user.id),
