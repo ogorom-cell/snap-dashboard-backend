@@ -114,7 +114,7 @@ def callback(code: str, state: str, db: Session = Depends(get_db)):
         value=create_jwt(user.id),
         httponly=True,
         secure=settings.REDIRECT_URI.startswith("https"),
-        samesite="lax",
+        samesite="none",   # cross-site: frontend (github.io) ≠ backend (onrender.com)
         max_age=settings.JWT_EXPIRE_HOURS * 3600,
     )
     return response
