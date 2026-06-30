@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from config import settings
 from models import User
 
-SNAP_API_BASE = "https://businessapi.snapchat.com/v1/public_profiles"
+SNAP_API_BASE = "https://businessapi.snapchat.com/public/v1/public_profiles"
 TOKEN_URL = "https://accounts.snapchat.com/login/oauth2/access_token"
 AUTH_URL = "https://accounts.snapchat.com/login/oauth2/authorize"
 
@@ -79,7 +79,7 @@ def snap_get(user: User, db: Session, path: str, params: dict = None) -> dict:
     """Authenticated GET to the Snap Business API."""
     token = ensure_fresh_token(user, db)
     resp = httpx.get(
-        f"https://businessapi.snapchat.com/v1/{path}",
+        f"https://businessapi.snapchat.com/public/v1/{path}",
         headers={"Authorization": f"Bearer {token}"},
         params=params or {},
         timeout=30,
@@ -92,7 +92,7 @@ def snap_post(user: User, db: Session, path: str, json: dict = None, data=None, 
     """Authenticated POST to the Snap Business API."""
     token = ensure_fresh_token(user, db)
     resp = httpx.post(
-        f"https://businessapi.snapchat.com/v1/{path}",
+        f"https://businessapi.snapchat.com/public/v1/{path}",
         headers={"Authorization": f"Bearer {token}"},
         json=json,
         data=data,
@@ -104,9 +104,9 @@ def snap_post(user: User, db: Session, path: str, json: dict = None, data=None, 
 
 
 def snap_get_raw(access_token: str, path: str, params: dict = None) -> dict:
-    """Authenticated GET using a raw access token (used during auth before user is saved)."""
+    """Authenticated GET using a raw access token."""
     resp = httpx.get(
-        f"https://businessapi.snapchat.com/v1/{path}",
+        f"https://businessapi.snapchat.com/public/v1/{path}",
         headers={"Authorization": f"Bearer {access_token}"},
         params=params or {},
         timeout=30,
@@ -116,7 +116,7 @@ def snap_get_raw(access_token: str, path: str, params: dict = None) -> dict:
 
 
 def get_user_profiles(user: User, db: Session) -> list[dict]:
-    data = snap_get(user, db, "me/public_profiles")
+    data = snap_get(user, db, "public_profiles")
     return data.get("public_profiles", [])
 
 
