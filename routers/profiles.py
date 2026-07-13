@@ -48,13 +48,13 @@ def debug_profiles(user: User = Depends(get_current_user), db: Session = Depends
     end = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
     start = end - timedelta(days=7)
     fmt = "%Y-%m-%dT%H:%M:%S.000Z"
-    fields = "IMPRESSIONS,STORY_VIEWS,VIEW_TIME,SUBSCRIBERS,SUBSCRIBE_COUNT,SHARES,REPLIES,SCREENSHOTS,SWIPE_UPS"
+    # Valid PROFILE metric enum names (per Snap Metrics docs)
+    fields = "SUBSCRIBERS,SUBSCRIBERS_GAINED,STORY_VIEWS,AVG_VIEW_TIME_MILLIS,SHARES,VIEWERS,VIEWS,INTERACTIONS"
     stats_variants = [
-        ("camelCase+assetType", {"granularity": "DAY", "startTime": start.strftime(fmt),
-                                 "endTime": end.strftime(fmt), "fields": fields, "assetType": "PROFILE"}),
-        ("camelCase+LIFETIME",  {"granularity": "LIFETIME", "fields": fields, "assetType": "PROFILE"}),
-        ("snake_case (current)", {"granularity": "DAY", "start_time": start.strftime(fmt),
-                                  "end_time": end.strftime(fmt), "fields": fields.lower()}),
+        ("DAY timeseries", {"granularity": "DAY", "startTime": start.strftime(fmt),
+                            "endTime": end.strftime(fmt), "fields": fields, "assetType": "PROFILE"}),
+        ("TOTAL", {"granularity": "TOTAL", "startTime": start.strftime(fmt),
+                   "endTime": end.strftime(fmt), "fields": fields, "assetType": "PROFILE"}),
     ]
     out["stats"] = []
     for label, params in stats_variants:
