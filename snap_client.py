@@ -80,7 +80,7 @@ def snap_get(user: User, db: Session, path: str, params: dict = None) -> dict:
     token = ensure_fresh_token(user, db)
     resp = httpx.get(
         f"https://businessapi.snapchat.com/public/v1/{path}",
-        headers={"Authorization": f"Bearer {token}"},
+        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
         params=params or {},
         timeout=30,
     )
@@ -89,7 +89,11 @@ def snap_get(user: User, db: Session, path: str, params: dict = None) -> dict:
 
 
 def snap_post(user: User, db: Session, path: str, json: dict = None, data=None, files=None) -> dict:
-    """Authenticated POST to the Snap Business API."""
+    """Authenticated POST to the Snap Business API.
+
+    Do NOT force Content-Type here — httpx sets application/json for json=,
+    and the correct multipart boundary for files=. Forcing it breaks uploads.
+    """
     token = ensure_fresh_token(user, db)
     resp = httpx.post(
         f"https://businessapi.snapchat.com/public/v1/{path}",
@@ -107,7 +111,7 @@ def snap_get_raw(access_token: str, path: str, params: dict = None) -> dict:
     """Authenticated GET using a raw access token."""
     resp = httpx.get(
         f"https://businessapi.snapchat.com/public/v1/{path}",
-        headers={"Authorization": f"Bearer {access_token}"},
+        headers={"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"},
         params=params or {},
         timeout=30,
     )

@@ -24,14 +24,15 @@ def debug_profiles(user: User = Depends(get_current_user), db: Session = Depends
     """Probe candidate Snap API endpoints to find which one returns the user's
     organizations / public profiles. No token is exposed in the output."""
     token = snap_client.ensure_fresh_token(user, db)
-    headers = {"Authorization": f"Bearer {token}"}
+    # Content-Type is required even on GET for the /public/v1/ surface
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    B = "https://businessapi.snapchat.com/public/v1"
     candidates = [
-        ("businessapi /v1/me",                 "https://businessapi.snapchat.com/v1/me"),
-        ("businessapi /v1/me/organizations",   "https://businessapi.snapchat.com/v1/me/organizations"),
-        ("businessapi /public/v1/me",          "https://businessapi.snapchat.com/public/v1/me"),
-        ("businessapi /public/v1/public_profiles", "https://businessapi.snapchat.com/public/v1/public_profiles"),
-        ("adsapi /v1/me",                      "https://adsapi.snapchat.com/v1/me"),
-        ("adsapi /v1/me/organizations",        "https://adsapi.snapchat.com/v1/me/organizations"),
+        ("public/v1/me",                    f"{B}/me"),
+        ("public/v1/me/organizations",      f"{B}/me/organizations"),
+        ("public/v1/organizations",         f"{B}/organizations"),
+        ("public/v1/public_profiles",       f"{B}/public_profiles"),
+        ("public/v1/me/public_profiles",    f"{B}/me/public_profiles"),
     ]
     out: dict = {"token_len": len(token or ""), "results": []}
     for label, url in candidates:
