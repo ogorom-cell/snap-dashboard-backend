@@ -21,37 +21,49 @@ def list_profiles(user: User = Depends(get_current_user), db: Session = Depends(
 
 @router.get("/debug")
 def debug_profiles(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Probe candidate Snap API endpoints to find which one returns the user's
-    organizations / public profiles. No token is exposed in the output."""
+    """Probe the real stats endpoint for the user's own profile and return the
+    raw Snap response so we can see the exact metric names + shape. No token
+    is exposed in the output."""
+    from datetime import datetime, timezone, timedelta
     token = snap_client.ensure_fresh_token(user, db)
-    # /v1/ surface wants only Authorization on GET
     headers = {"Authorization": f"Bearer {token}"}
     B = "https://businessapi.snapchat.com/v1"
-    candidates = [
-        ("v1/public_profiles/my_profile", f"{B}/public_profiles/my_profile"),
+    out: dict = {"token_len": len(token or "")}
+
+    # 1) my_profile → get the profile id
+    prof_id = None
+    try:
+        r = httpx.get(f"{B}/public_profiles/my_profile", headers=headers, timeout=20)
+        j = r.json()
+        prof_id = (j.get("public_profile") or j.get("me") or j).get("id")
+        out["my_profile"] = {"status": r.status_code, "id": prof_id,
+                             "display_name": (j.get("public_profile") or {}).get("display_name")}
+    except Exception as e:
+        out["my_profile_error"] = str(e)
+
+    if not prof_id:
+        return out
+
+    # 2) stats — try camelCase params + UPPERCASE fields (per Snap docs)
+    end = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    start = end - timedelta(days=7)
+    fmt = "%Y-%m-%dT%H:%M:%S.000Z"
+    fields = "IMPRESSIONS,STORY_VIEWS,VIEW_TIME,SUBSCRIBERS,SUBSCRIBE_COUNT,SHARES,REPLIES,SCREENSHOTS,SWIPE_UPS"
+    stats_variants = [
+        ("camelCase+assetType", {"granularity": "DAY", "startTime": start.strftime(fmt),
+                                 "endTime": end.strftime(fmt), "fields": fields, "assetType": "PROFILE"}),
+        ("camelCase+LIFETIME",  {"granularity": "LIFETIME", "fields": fields, "assetType": "PROFILE"}),
+        ("snake_case (current)", {"granularity": "DAY", "start_time": start.strftime(fmt),
+                                  "end_time": end.strftime(fmt), "fields": fields.lower()}),
     ]
-    out: dict = {"token_len": len(token or ""), "results": []}
-    for label, url in candidates:
-        entry = {"endpoint": label, "url": url}
+    out["stats"] = []
+    for label, params in stats_variants:
+        entry = {"variant": label, "params": params}
         try:
-            r = httpx.get(url, headers=headers, timeout=20)
+            r = httpx.get(f"{B}/public_profiles/{prof_id}/stats", headers=headers, params=params, timeout=25)
             entry["status"] = r.status_code
-            body = r.text[:800]
-            entry["body"] = body
-            # Surface any organization_id we can spot
-            try:
-                j = r.json()
-                orgs = j.get("organizations")
-                if isinstance(orgs, list) and orgs:
-                    ids = []
-                    for o in orgs:
-                        oo = o.get("organization", o)
-                        if oo.get("id"):
-                            ids.append({"id": oo["id"], "name": oo.get("name")})
-                    entry["found_org_ids"] = ids
-            except Exception:
-                pass
+            entry["body"] = r.text[:1500]
         except Exception as e:
             entry["exception"] = str(e)
-        out["results"].append(entry)
+        out["stats"].append(entry)
     return out
