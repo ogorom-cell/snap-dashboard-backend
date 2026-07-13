@@ -24,15 +24,11 @@ def debug_profiles(user: User = Depends(get_current_user), db: Session = Depends
     """Probe candidate Snap API endpoints to find which one returns the user's
     organizations / public profiles. No token is exposed in the output."""
     token = snap_client.ensure_fresh_token(user, db)
-    # Content-Type is required even on GET for the /public/v1/ surface
-    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-    B = "https://businessapi.snapchat.com/public/v1"
+    # /v1/ surface wants only Authorization on GET
+    headers = {"Authorization": f"Bearer {token}"}
+    B = "https://businessapi.snapchat.com/v1"
     candidates = [
-        ("public/v1/me",                    f"{B}/me"),
-        ("public/v1/me/organizations",      f"{B}/me/organizations"),
-        ("public/v1/organizations",         f"{B}/organizations"),
-        ("public/v1/public_profiles",       f"{B}/public_profiles"),
-        ("public/v1/me/public_profiles",    f"{B}/me/public_profiles"),
+        ("v1/public_profiles/my_profile", f"{B}/public_profiles/my_profile"),
     ]
     out: dict = {"token_len": len(token or ""), "results": []}
     for label, url in candidates:

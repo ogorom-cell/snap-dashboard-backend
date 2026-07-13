@@ -76,11 +76,11 @@ def ensure_fresh_token(user: User, db: Session) -> str:
 
 
 def snap_get(user: User, db: Session, path: str, params: dict = None) -> dict:
-    """Authenticated GET to the Snap Business API."""
+    """Authenticated GET to the Snap Business API (/v1/ surface, Authorization only)."""
     token = ensure_fresh_token(user, db)
     resp = httpx.get(
-        f"https://businessapi.snapchat.com/public/v1/{path}",
-        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+        f"https://businessapi.snapchat.com/v1/{path}",
+        headers={"Authorization": f"Bearer {token}"},
         params=params or {},
         timeout=30,
     )
@@ -96,7 +96,7 @@ def snap_post(user: User, db: Session, path: str, json: dict = None, data=None, 
     """
     token = ensure_fresh_token(user, db)
     resp = httpx.post(
-        f"https://businessapi.snapchat.com/public/v1/{path}",
+        f"https://businessapi.snapchat.com/v1/{path}",
         headers={"Authorization": f"Bearer {token}"},
         json=json,
         data=data,
@@ -110,8 +110,8 @@ def snap_post(user: User, db: Session, path: str, json: dict = None, data=None, 
 def snap_get_raw(access_token: str, path: str, params: dict = None) -> dict:
     """Authenticated GET using a raw access token."""
     resp = httpx.get(
-        f"https://businessapi.snapchat.com/public/v1/{path}",
-        headers={"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"},
+        f"https://businessapi.snapchat.com/v1/{path}",
+        headers={"Authorization": f"Bearer {access_token}"},
         params=params or {},
         timeout=30,
     )
@@ -119,9 +119,48 @@ def snap_get_raw(access_token: str, path: str, params: dict = None) -> dict:
     return resp.json()
 
 
+def _normalize_profile(p: dict) -> dict:
+    """Map a Snap public_profile object to the shape the frontend expects."""
+    return {
+        "id": p.get("id"),
+        "name": p.get("display_name") or p.get("name") or "My Profile",
+        "username": p.get("username") or p.get("handle") or p.get("id"),
+        "logo_url": p.get("profile_picture_uri") or p.get("logo_url"),
+        "raw": p,
+    }
+
+
 def get_user_profiles(user: User, db: Session) -> list[dict]:
-    data = snap_get(user, db, "public_profiles")
-    return data.get("public_profiles", [])
+    """Return the authenticated user's own public profile(s).
+
+    Snap's magic endpoint /v1/public_profiles/my_profile returns the profile
+    tied to the user token (snapchat-profile-api scope). Response is wrapped;
+    we defensively unwrap the common shapes.
+    """
+    data = snap_get(user, db, "public_profiles/my_profile")
+
+    # Shape A: {"me": {...}} or {"public_profile": {...}}
+    for key in ("me", "public_profile"):
+        obj = data.get(key)
+        if isinstance(obj, dict) and obj.get("id"):
+            return [_normalize_profile(obj)]
+
+    # Shape B: {"public_profiles": [{"public_profile": {...}}, ...]}
+    lst = data.get("public_profiles")
+    if isinstance(lst, list) and lst:
+        out = []
+        for item in lst:
+            obj = item.get("public_profile", item) if isinstance(item, dict) else {}
+            if obj.get("id"):
+                out.append(_normalize_profile(obj))
+        if out:
+            return out
+
+    # Shape C: profile fields at top level
+    if data.get("id"):
+        return [_normalize_profile(data)]
+
+    return []
 
 
 def get_profile_stats(user: User, db: Session, profile_id: str, start_time: str, end_time: str, granularity: str = "DAY", fields: str = None) -> dict:
