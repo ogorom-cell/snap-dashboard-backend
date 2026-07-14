@@ -185,21 +185,31 @@ def get_profile_stats(user: User, db: Session, profile_id: str, start_time: str,
     return snap_get(user, db, f"public_profiles/{profile_id}/stats", params)
 
 
-def _stat_value(field_obj: dict) -> float:
-    """Pull the DEFAULT-breakdown numeric value out of a stats field."""
-    stats = field_obj.get("stats") or []
-    for s in stats:
+def _stat_value_from_list(stats: list) -> float:
+    """Pull the DEFAULT-breakdown numeric value out of a stats list."""
+    for s in (stats or []):
         if s.get("dimension_breakdown") in (None, "DEFAULT"):
             try:
                 return float(s.get("value") or 0)
             except (TypeError, ValueError):
                 return 0.0
+    # No DEFAULT row — fall back to the first value present
+    if stats:
+        try:
+            return float(stats[0].get("value") or 0)
+        except (TypeError, ValueError):
+            return 0.0
     return 0.0
 
 
 def parse_stats(data: dict) -> tuple[dict, list]:
     """Parse Snap's assets[].timeseries[].fields[] into
-    (totals dict {FIELD_NAME: number}, timeseries list of {start_time, <fields>})."""
+    (totals dict {FIELD_NAME: number}, timeseries list of {start_time, <fields>}).
+
+    Each entry in fields[] looks like:
+        {"field": {"field_name": "VIEWS"}, "stats": [{"dimension_breakdown": "DEFAULT", "value": "123"}]}
+    Note: `stats` is a SIBLING of `field`, not nested inside it.
+    """
     assets = data.get("assets") or []
     if not assets:
         return {}, []
@@ -209,11 +219,13 @@ def parse_stats(data: dict) -> tuple[dict, list]:
     for bucket in timeseries:
         row = {"start_time": bucket.get("start_time"), "end_time": bucket.get("end_time")}
         for f in bucket.get("fields") or []:
-            fld = f.get("field", f)
-            name = fld.get("field_name")
+            fld = f.get("field") or {}
+            name = fld.get("field_name") or f.get("field_name")
             if not name:
                 continue
-            val = _stat_value(fld)
+            # stats live at the entry level (sibling of "field"); fall back to inside field
+            stats = f.get("stats") or fld.get("stats") or []
+            val = _stat_value_from_list(stats)
             row[name] = val
             totals[name] = totals.get(name, 0) + val
         series.append(row)
