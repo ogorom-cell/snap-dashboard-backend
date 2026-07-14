@@ -290,7 +290,7 @@ def post_saved_story(user: User, db: Session, profile_id: str, media_id: str, ca
     return snap_post(user, db, f"public_profiles/{profile_id}/saved_stories", json=payload)
 
 
-_MEDIA_CHUNK = 32 * 1024 * 1024  # Snap requires chunks <= 32 MB
+_MEDIA_CHUNK = 30 * 1024 * 1024  # Snap caps each part at 32 MiB; stay under it (multipart overhead counts)
 
 
 def _abs_media_url(path_or_url: str) -> str:
@@ -357,8 +357,11 @@ def upload_media(user: User, db: Session, profile_id: str, encrypted_bytes: byte
             r.raise_for_status()
             part += 1
         if finalize_path:
+            # Must be multipart/form-data (like the ADD calls) — a plain
+            # urlencoded body gets 415. files={"action": (None, "FINALIZE")}
+            # forces multipart encoding for a value-only field.
             fin = httpx.post(_abs_media_url(finalize_path), headers=headers,
-                             data={"action": "FINALIZE"}, timeout=60)
+                             files={"action": (None, "FINALIZE")}, timeout=60)
             logger.error("STEP3 finalize status=%s body=%s", fin.status_code, fin.text[:300])
             fin.raise_for_status()
     else:
