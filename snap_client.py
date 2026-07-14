@@ -121,11 +121,14 @@ def snap_get_raw(access_token: str, path: str, params: dict = None) -> dict:
 
 def _normalize_profile(p: dict) -> dict:
     """Map a Snap public_profile object to the shape the frontend expects."""
+    logos = p.get("logo_urls") or {}
     return {
         "id": p.get("id"),
         "name": p.get("display_name") or p.get("name") or "My Profile",
-        "username": p.get("username") or p.get("handle") or p.get("id"),
-        "logo_url": p.get("profile_picture_uri") or p.get("logo_url"),
+        # Snap public profiles have no @username; leave null rather than showing the UUID
+        "username": p.get("username") or p.get("handle") or None,
+        "logo_url": (p.get("profile_picture_uri") or p.get("logo_url")
+                     or logos.get("discover_feed_logo_url") or logos.get("original_logo_url")),
         "raw": p,
     }
 
@@ -163,15 +166,58 @@ def get_user_profiles(user: User, db: Session) -> list[dict]:
     return []
 
 
+# Valid PROFILE metric enum names (Snap Public Profile Metrics API)
+PROFILE_FIELDS = "SUBSCRIBERS,SUBSCRIBERS_GAINED,STORY_VIEWS,AVG_VIEW_TIME_MILLIS,SHARES,VIEWERS,VIEWS,INTERACTIONS"
+
+
 def get_profile_stats(user: User, db: Session, profile_id: str, start_time: str, end_time: str, granularity: str = "DAY", fields: str = None) -> dict:
+    """Call the Snap stats endpoint. Uses camelCase startTime/endTime + assetType
+    (the shape Snap actually validates). start_time/end_time must be
+    yyyy-mm-ddT00:00:00.000Z."""
     params = {
-        "start_time": start_time,
-        "end_time": end_time,
         "granularity": granularity,
+        "fields": fields or PROFILE_FIELDS,
+        "assetType": "PROFILE",
     }
-    if fields:
-        params["fields"] = fields
+    if granularity != "LIFETIME":
+        params["startTime"] = start_time
+        params["endTime"] = end_time
     return snap_get(user, db, f"public_profiles/{profile_id}/stats", params)
+
+
+def _stat_value(field_obj: dict) -> float:
+    """Pull the DEFAULT-breakdown numeric value out of a stats field."""
+    stats = field_obj.get("stats") or []
+    for s in stats:
+        if s.get("dimension_breakdown") in (None, "DEFAULT"):
+            try:
+                return float(s.get("value") or 0)
+            except (TypeError, ValueError):
+                return 0.0
+    return 0.0
+
+
+def parse_stats(data: dict) -> tuple[dict, list]:
+    """Parse Snap's assets[].timeseries[].fields[] into
+    (totals dict {FIELD_NAME: number}, timeseries list of {start_time, <fields>})."""
+    assets = data.get("assets") or []
+    if not assets:
+        return {}, []
+    timeseries = assets[0].get("timeseries") or []
+    series: list = []
+    totals: dict = {}
+    for bucket in timeseries:
+        row = {"start_time": bucket.get("start_time"), "end_time": bucket.get("end_time")}
+        for f in bucket.get("fields") or []:
+            fld = f.get("field", f)
+            name = fld.get("field_name")
+            if not name:
+                continue
+            val = _stat_value(fld)
+            row[name] = val
+            totals[name] = totals.get(name, 0) + val
+        series.append(row)
+    return totals, series
 
 
 def get_profile_content(user: User, db: Session, profile_id: str, limit: int = 20) -> dict:

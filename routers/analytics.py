@@ -15,36 +15,55 @@ from models import User
 router = APIRouter(prefix="/analytics", tags=["analytics"])
 
 
+def _snap_time(iso: str) -> str:
+    """Normalise any ISO datetime to Snap's required midnight-aligned format."""
+    from datetime import datetime, timezone
+    try:
+        dt = datetime.fromisoformat(iso.replace("Z", "+00:00"))
+    except ValueError:
+        dt = datetime.now(timezone.utc)
+    dt = dt.astimezone(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    return dt.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+
+
 @router.get("/stats")
 def get_stats(
     profile_id: str = Query(...),
     start_time: str = Query(..., description="ISO 8601 datetime"),
     end_time: str = Query(..., description="ISO 8601 datetime"),
-    granularity: str = Query("DAY", description="DAY | WEEK | MONTH | LIFETIME"),
-    fields: str = Query(
-        None,
-        description="Comma-separated Snap API field names. Defaults to all key metrics.",
-    ),
+    granularity: str = Query("DAY", description="DAY | TOTAL | LIFETIME"),
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    if not fields:
-        fields = (
-            "story_impressions,subscriber_count,avg_screen_time_millis,"
-            "swipe_up_count,share_count,reply_count,total_time_viewed"
-        )
-    data = snap_client.get_profile_stats(user, db, profile_id, start_time, end_time, granularity, fields)
+    start = _snap_time(start_time)
+    end = _snap_time(end_time)
 
-    # Normalise the response so the dashboard always has a consistent shape
-    # Snap returns stats nested under different keys depending on the endpoint version
-    metrics = data.get("total_stats") or data.get("stats") or data.get("metrics") or {}
-    timeseries = data.get("timeseries") or data.get("daily_stats") or []
+    # DAY for the time series (chart), TOTAL for the KPI headline numbers
+    day_data = snap_client.get_profile_stats(user, db, profile_id, start, end, "DAY")
+    total_data = snap_client.get_profile_stats(user, db, profile_id, start, end, "TOTAL")
 
-    return {
-        "metrics": metrics,
-        "timeseries": timeseries,
-        "raw": data,  # pass through full Snap response for debugging
+    totals, _ = snap_client.parse_stats(total_data)
+    _, series = snap_client.parse_stats(day_data)
+
+    # Map Snap enum names → stable lowercase keys the dashboard reads
+    metrics = {
+        "subscribers":          totals.get("SUBSCRIBERS", 0),
+        "subscribers_gained":   totals.get("SUBSCRIBERS_GAINED", 0),
+        "story_views":          totals.get("STORY_VIEWS", 0),
+        "avg_view_time_millis": totals.get("AVG_VIEW_TIME_MILLIS", 0),
+        "shares":               totals.get("SHARES", 0),
+        "viewers":              totals.get("VIEWERS", 0),
+        "views":                totals.get("VIEWS", 0),
+        "interactions":         totals.get("INTERACTIONS", 0),
     }
+    # Time series for the chart: one point per day with story views
+    timeseries = [
+        {"start_time": r.get("start_time"), "story_views": r.get("STORY_VIEWS", 0),
+         "views": r.get("VIEWS", 0)}
+        for r in series
+    ]
+
+    return {"metrics": metrics, "timeseries": timeseries}
 
 
 @router.get("/content")
