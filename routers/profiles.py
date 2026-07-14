@@ -19,6 +19,50 @@ def list_profiles(user: User = Depends(get_current_user), db: Session = Depends(
     return profiles
 
 
+@router.get("/test")
+def test_access(ids: str = "", user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Given ?ids=a,b,c (Public Profile UUIDs OR usernames), test whether this
+    token can read each profile's metadata AND its stats. No token exposed."""
+    from datetime import datetime, timezone, timedelta
+    token = snap_client.ensure_fresh_token(user, db)
+    headers = {"Authorization": f"Bearer {token}"}
+    B = "https://businessapi.snapchat.com/v1"
+    end = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    start = end - timedelta(days=7)
+    fmt = "%Y-%m-%dT%H:%M:%S.000Z"
+    values = [v.strip() for v in ids.split(",") if v.strip()]
+    out: dict = {"tested": len(values), "results": []}
+    for v in values:
+        entry = {"input": v}
+        # metadata lookup (public read)
+        try:
+            r = httpx.get(f"{B}/public_profiles/{v}", headers=headers, timeout=20)
+            entry["lookup_status"] = r.status_code
+            try:
+                pp = (r.json().get("public_profile") or {})
+                entry["name"] = pp.get("display_name")
+                entry["resolved_id"] = pp.get("id")
+            except Exception:
+                entry["lookup_body"] = r.text[:300]
+        except Exception as e:
+            entry["lookup_error"] = str(e)
+        # stats access (permissioned)
+        pid = entry.get("resolved_id") or v
+        try:
+            r = httpx.get(f"{B}/public_profiles/{pid}/stats", headers=headers,
+                          params={"granularity": "TOTAL", "startTime": start.strftime(fmt),
+                                  "endTime": end.strftime(fmt), "fields": snap_client.PROFILE_FIELDS,
+                                  "assetType": "PROFILE"}, timeout=25)
+            entry["stats_status"] = r.status_code
+            entry["stats_access"] = "YES ✅" if r.status_code == 200 else "NO ❌"
+            if r.status_code != 200:
+                entry["stats_body"] = r.text[:300]
+        except Exception as e:
+            entry["stats_error"] = str(e)
+        out["results"].append(entry)
+    return out
+
+
 @router.get("/debug")
 def debug_org_profiles(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Probe org-scoped endpoints to discover every profile the user can access.
