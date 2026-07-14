@@ -220,6 +220,37 @@ def parse_stats(data: dict) -> tuple[dict, list]:
     return totals, series
 
 
+def search_profiles(user: User, db: Session, query: str) -> list[dict]:
+    """Resolve a username/display name to public profiles via Creator Discovery search."""
+    token = ensure_fresh_token(user, db)
+    resp = httpx.get(
+        "https://businessapi.snapchat.com/public/v1/public_profiles/search",
+        headers={"Authorization": f"Bearer {token}"},
+        params={"query": query, "limit": 10},
+        timeout=20,
+    )
+    if resp.status_code != 200:
+        return []
+    out = []
+    for item in resp.json().get("public_profiles", []):
+        pp = item.get("public_profile") or {}
+        if pp.get("id"):
+            out.append(pp)
+    return out
+
+
+def has_stats_access(user: User, db: Session, profile_id: str) -> bool:
+    """True if this token can read the given profile's stats (i.e. user manages it)."""
+    token = ensure_fresh_token(user, db)
+    resp = httpx.get(
+        f"https://businessapi.snapchat.com/v1/public_profiles/{profile_id}/stats",
+        headers={"Authorization": f"Bearer {token}"},
+        params={"granularity": "LIFETIME", "fields": "SUBSCRIBERS", "assetType": "PROFILE"},
+        timeout=20,
+    )
+    return resp.status_code == 200
+
+
 def get_profile_content(user: User, db: Session, profile_id: str, limit: int = 20) -> dict:
     return snap_get(user, db, f"public_profiles/{profile_id}/media", {"limit": limit})
 

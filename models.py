@@ -38,6 +38,19 @@ class User(Base):
     scheduled_posts = relationship("ScheduledPost", back_populates="user")
 
 
+class ManagedProfile(Base):
+    """A Snap public profile a user has added to their dashboard (beyond their own)."""
+    __tablename__ = "managed_profiles"
+
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id = Column(String, ForeignKey("users.id"), nullable=False)
+    profile_id = Column(String, nullable=False)   # Snap public profile UUID
+    username = Column(Text)
+    display_name = Column(Text)
+    logo_url = Column(Text)
+    added_at = Column(DateTime(timezone=True), default=utcnow)
+
+
 class ScheduledPost(Base):
     __tablename__ = "scheduled_posts"
 
