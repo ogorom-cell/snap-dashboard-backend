@@ -290,12 +290,68 @@ def post_saved_story(user: User, db: Session, profile_id: str, media_id: str, ca
     return snap_post(user, db, f"public_profiles/{profile_id}/saved_stories", json=payload)
 
 
+_MEDIA_CHUNK = 32 * 1024 * 1024  # Snap requires chunks <= 32 MB
+
+
+def _abs_media_url(path_or_url: str) -> str:
+    if path_or_url.startswith("http"):
+        return path_or_url
+    return "https://businessapi.snapchat.com/" + path_or_url.lstrip("/")
+
+
+def _first_media_obj(data: dict) -> dict:
+    """Unwrap Snap's {"media": [{"media": {...}}]} envelope."""
+    arr = data.get("media")
+    if isinstance(arr, list) and arr:
+        item = arr[0]
+        return item.get("media", item) if isinstance(item, dict) else {}
+    if isinstance(arr, dict):
+        return arr
+    return data
+
+
 def upload_media(user: User, db: Session, profile_id: str, encrypted_bytes: bytes, key_b64: str, iv_b64: str, mime_type: str = "video/mp4") -> str:
-    """Upload AES-encrypted media to Snap and return the media_id."""
-    data = snap_post(
-        user, db,
-        f"public_profiles/{profile_id}/media",
-        files={"file": ("media", encrypted_bytes, mime_type)},
-        data={"encryption_key": key_b64, "encryption_iv": iv_b64},
+    """Upload AES-encrypted media to Snap via the 3-step flow and return media_id:
+      1. create media container (POST /media with type/name/key/iv)
+      2. upload the encrypted bytes in <=32MB chunks to the returned add_path
+      3. POST the finalize_path
+    """
+    token = ensure_fresh_token(user, db)
+    headers = {"Authorization": f"Bearer {token}"}
+    media_type = "IMAGE" if (mime_type or "").startswith("image") else "VIDEO"
+
+    # Step 1 — create container
+    create = httpx.post(
+        f"https://businessapi.snapchat.com/v1/public_profiles/{profile_id}/media",
+        headers=headers,
+        json={"media": [{"name": "dashboard-upload", "type": media_type,
+                         "key": key_b64, "iv": iv_b64}]},
+        timeout=30,
     )
-    return data["media"]["id"]
+    create.raise_for_status()
+    obj = _first_media_obj(create.json())
+    media_id = obj.get("id") or obj.get("media_id")
+    add_path = obj.get("add_path")
+    finalize_path = obj.get("finalize_path")
+    if not (media_id and add_path and finalize_path):
+        raise RuntimeError(f"Unexpected create-media response: {create.text[:300]}")
+
+    # Step 2 — upload chunks
+    part = 1
+    for i in range(0, len(encrypted_bytes), _MEDIA_CHUNK):
+        chunk = encrypted_bytes[i:i + _MEDIA_CHUNK]
+        r = httpx.post(
+            _abs_media_url(add_path), headers=headers,
+            data={"action": "ADD", "part_number": str(part)},
+            files={"file": ("chunk", chunk, "application/octet-stream")},
+            timeout=180,
+        )
+        r.raise_for_status()
+        part += 1
+
+    # Step 3 — finalize
+    fin = httpx.post(_abs_media_url(finalize_path), headers=headers,
+                     data={"action": "FINALIZE"}, timeout=60)
+    fin.raise_for_status()
+
+    return media_id

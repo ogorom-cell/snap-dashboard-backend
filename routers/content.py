@@ -10,6 +10,8 @@ POST   /content/schedule         — queue a post for later
 GET    /content/scheduled        — list scheduled posts
 DELETE /content/scheduled/{id}   — cancel a scheduled post
 """
+import logging
+import httpx
 from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Query
 from typing import Optional, List
@@ -21,6 +23,7 @@ from auth_utils import get_current_user
 from database import get_db
 from models import ScheduledPost, User
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/content", tags=["content"])
 
 
@@ -41,7 +44,22 @@ async def upload_media(
     encrypted_bytes, key_b64, iv_b64 = enc.encrypt_media(raw)
     mime = file.content_type or "video/mp4"
 
-    media_id = snap_client.upload_media(user, db, profile_id, encrypted_bytes, key_b64, iv_b64, mime)
+    try:
+        media_id = snap_client.upload_media(user, db, profile_id, encrypted_bytes, key_b64, iv_b64, mime)
+    except httpx.HTTPStatusError as exc:
+        # Surface the real Snap error (with a clean, CORS-friendly response)
+        body = exc.response.text[:400]
+        logger.error("Snap media upload failed (%s): %s", exc.response.status_code, body)
+        detail = f"Snapchat rejected the upload ({exc.response.status_code}). "
+        if exc.response.status_code == 403:
+            detail += "This account may not have posting permission."
+        else:
+            detail += body
+        raise HTTPException(status_code=502, detail=detail)
+    except Exception as exc:
+        logger.exception("Media upload error")
+        raise HTTPException(status_code=502, detail=f"Upload failed: {exc}")
+
     return {"media_id": media_id, "filename": file.filename, "size_bytes": len(raw)}
 
 
