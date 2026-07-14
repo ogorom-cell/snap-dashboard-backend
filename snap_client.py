@@ -316,6 +316,8 @@ def upload_media(user: User, db: Session, profile_id: str, encrypted_bytes: byte
       2. upload the encrypted bytes in <=32MB chunks to the returned add_path
       3. POST the finalize_path
     """
+    import logging as _log
+    logger = _log.getLogger("snap_client.upload")
     token = ensure_fresh_token(user, db)
     headers = {"Authorization": f"Bearer {token}"}
     media_type = "IMAGE" if (mime_type or "").startswith("image") else "VIDEO"
@@ -329,30 +331,45 @@ def upload_media(user: User, db: Session, profile_id: str, encrypted_bytes: byte
               "key": key_b64, "iv": iv_b64},
         timeout=30,
     )
+    logger.error("STEP1 create status=%s body=%s", create.status_code, create.text[:500])
     create.raise_for_status()
     obj = _first_media_obj(create.json())
     media_id = obj.get("id") or obj.get("media_id")
     add_path = obj.get("add_path")
     finalize_path = obj.get("finalize_path")
-    if not (media_id and add_path and finalize_path):
-        raise RuntimeError(f"Unexpected create-media response: {create.text[:300]}")
+    logger.error("STEP1 parsed media_id=%s add_path=%s finalize_path=%s", media_id, add_path, finalize_path)
+    if not media_id:
+        raise RuntimeError(f"No media_id in create response: {create.text[:300]}")
 
-    # Step 2 — upload chunks
-    part = 1
-    for i in range(0, len(encrypted_bytes), _MEDIA_CHUNK):
-        chunk = encrypted_bytes[i:i + _MEDIA_CHUNK]
+    # Step 2 — upload the bytes.
+    if add_path:
+        # Chunked flow
+        part = 1
+        for i in range(0, len(encrypted_bytes), _MEDIA_CHUNK):
+            chunk = encrypted_bytes[i:i + _MEDIA_CHUNK]
+            r = httpx.post(
+                _abs_media_url(add_path), headers=headers,
+                data={"action": "ADD", "part_number": str(part)},
+                files={"file": ("chunk", chunk, "application/octet-stream")},
+                timeout=180,
+            )
+            logger.error("STEP2 chunk %s status=%s body=%s", part, r.status_code, r.text[:300])
+            r.raise_for_status()
+            part += 1
+        if finalize_path:
+            fin = httpx.post(_abs_media_url(finalize_path), headers=headers,
+                             data={"action": "FINALIZE"}, timeout=60)
+            logger.error("STEP3 finalize status=%s body=%s", fin.status_code, fin.text[:300])
+            fin.raise_for_status()
+    else:
+        # Simple single-shot upload (no add_path returned)
         r = httpx.post(
-            _abs_media_url(add_path), headers=headers,
-            data={"action": "ADD", "part_number": str(part)},
-            files={"file": ("chunk", chunk, "application/octet-stream")},
+            f"https://businessapi.snapchat.com/v1/public_profiles/{profile_id}/media/{media_id}/upload",
+            headers=headers,
+            files={"file": ("media", encrypted_bytes, "application/octet-stream")},
             timeout=180,
         )
+        logger.error("STEP2 simple-upload status=%s body=%s", r.status_code, r.text[:300])
         r.raise_for_status()
-        part += 1
-
-    # Step 3 — finalize
-    fin = httpx.post(_abs_media_url(finalize_path), headers=headers,
-                     data={"action": "FINALIZE"}, timeout=60)
-    fin.raise_for_status()
 
     return media_id
