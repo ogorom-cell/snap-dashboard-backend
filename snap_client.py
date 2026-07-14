@@ -320,12 +320,13 @@ def upload_media(user: User, db: Session, profile_id: str, encrypted_bytes: byte
     headers = {"Authorization": f"Bearer {token}"}
     media_type = "IMAGE" if (mime_type or "").startswith("image") else "VIDEO"
 
-    # Step 1 — create container
+    # Step 1 — create container. Public Profile API expects a FLAT body
+    # ({type,name,key,iv}), NOT the Ads-API {"media":[{...}]} wrapper.
     create = httpx.post(
         f"https://businessapi.snapchat.com/v1/public_profiles/{profile_id}/media",
         headers=headers,
-        json={"media": [{"name": "dashboard-upload", "type": media_type,
-                         "key": key_b64, "iv": iv_b64}]},
+        json={"type": media_type, "name": "dashboard-upload",
+              "key": key_b64, "iv": iv_b64},
         timeout=30,
     )
     create.raise_for_status()
