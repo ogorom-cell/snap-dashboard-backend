@@ -5,6 +5,7 @@ Analytics routes.
 GET /analytics/stats    — profile KPI stats (views, swipe-ups, subscribers, etc.)
 GET /analytics/content  — list of published posts with per-post metrics
 """
+import httpx
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 import snap_client
@@ -13,6 +14,31 @@ from database import get_db
 from models import User
 
 router = APIRouter(prefix="/analytics", tags=["analytics"])
+
+
+@router.get("/raw")
+def raw_stats(profile_id: str = Query(...), user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Return the raw Snap stats response for a profile so we can see if values
+    are genuinely zero or a parsing issue. Temporary diagnostic."""
+    from datetime import datetime, timezone, timedelta
+    token = snap_client.ensure_fresh_token(user, db)
+    headers = {"Authorization": f"Bearer {token}"}
+    end = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    start = end - timedelta(days=30)
+    fmt = "%Y-%m-%dT%H:%M:%S.000Z"
+    out = {}
+    for gran in ("TOTAL", "LIFETIME"):
+        params = {"granularity": gran, "fields": snap_client.PROFILE_FIELDS, "assetType": "PROFILE"}
+        if gran != "LIFETIME":
+            params["startTime"] = start.strftime(fmt)
+            params["endTime"] = end.strftime(fmt)
+        try:
+            r = httpx.get(f"https://businessapi.snapchat.com/v1/public_profiles/{profile_id}/stats",
+                          headers=headers, params=params, timeout=25)
+            out[gran] = {"status": r.status_code, "body": r.text[:2000]}
+        except Exception as e:
+            out[gran] = {"exception": str(e)}
+    return out
 
 
 def _snap_time(iso: str) -> str:
