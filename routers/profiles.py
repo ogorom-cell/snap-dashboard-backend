@@ -30,24 +30,49 @@ def test_access(ids: str = "", user: User = Depends(get_current_user), db: Sessi
     end = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
     start = end - timedelta(days=7)
     fmt = "%Y-%m-%dT%H:%M:%S.000Z"
+    import re as _re
+    UUID_RE = _re.compile(r"^[0-9a-fA-F-]{30,40}$")
     values = [v.strip() for v in ids.split(",") if v.strip()]
     out: dict = {"tested": len(values), "results": []}
     for v in values:
         entry = {"input": v}
-        # metadata lookup (public read)
-        try:
-            r = httpx.get(f"{B}/public_profiles/{v}", headers=headers, timeout=20)
-            entry["lookup_status"] = r.status_code
-            try:
-                pp = (r.json().get("public_profile") or {})
-                entry["name"] = pp.get("display_name")
-                entry["resolved_id"] = pp.get("id")
-            except Exception:
-                entry["lookup_body"] = r.text[:300]
-        except Exception as e:
-            entry["lookup_error"] = str(e)
+        resolved_id = v if UUID_RE.match(v) else None
+
+        # If it's a username, resolve it to a UUID via Creator Discovery search
+        if not resolved_id:
+            for search_url in (f"https://businessapi.snapchat.com/public/v1/public_profiles/search",
+                               f"{B}/public_profiles/search"):
+                try:
+                    r = httpx.get(search_url, headers=headers, params={"query": v, "limit": 5}, timeout=20)
+                    entry["search_status"] = r.status_code
+                    if r.status_code == 200:
+                        pps = r.json().get("public_profiles") or []
+                        matches = [(p.get("public_profile") or {}) for p in pps]
+                        entry["search_matches"] = [
+                            {"id": m.get("id"), "username": m.get("snap_user_name"),
+                             "name": m.get("display_name")} for m in matches[:5]
+                        ]
+                        # pick exact username match if present, else first
+                        exact = next((m for m in matches
+                                      if (m.get("snap_user_name") or "").lower() == v.lower()), None)
+                        chosen = exact or (matches[0] if matches else None)
+                        if chosen:
+                            resolved_id = chosen.get("id")
+                            entry["resolved_id"] = resolved_id
+                            entry["name"] = chosen.get("display_name")
+                        break
+                    else:
+                        entry["search_body"] = r.text[:200]
+                except Exception as e:
+                    entry["search_error"] = str(e)
+
+        if not resolved_id:
+            entry["stats_access"] = "N/A (could not resolve)"
+            out["results"].append(entry)
+            continue
+
         # stats access (permissioned)
-        pid = entry.get("resolved_id") or v
+        pid = resolved_id
         try:
             r = httpx.get(f"{B}/public_profiles/{pid}/stats", headers=headers,
                           params={"granularity": "TOTAL", "startTime": start.strftime(fmt),
